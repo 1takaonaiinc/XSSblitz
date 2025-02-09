@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>XSS Scan Report - {{.Target}}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto px-4 py-8">
+        <header class="bg-white shadow-lg rounded-lg p-6 mb-8">
+            <h1 class="text-3xl font-bold mb-4">XSS Vulnerability Scan Report</h1>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="p-4 bg-blue-50 rounded-lg">
+                    <p class="text-sm text-blue-600">Target</p>
+                    <p class="font-semibold">{{.Target}}</p>
+                </div>
+                <div class="p-4 bg-blue-50 rounded-lg">
+                    <p class="text-sm text-blue-600">Scan ID</p>
+                    <p class="font-semibold">{{.ScanID}}</p>
+                </div>
+                <div class="p-4 bg-blue-50 rounded-lg">
+                    <p class="text-sm text-blue-600">Start Time</p>
+                    <p class="font-semibold">{{.StartTime.Format "2006-01-02 15:04:05"}}</p>
+                </div>
+                <div class="p-4 bg-blue-50 rounded-lg">
+                    <p class="text-sm text-blue-600">Duration</p>
+                    <p class="font-semibold">{{.EndTime.Sub .StartTime}}</p>
+                </div>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+            <!-- Summary Charts -->
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <h2 class="text-xl font-bold mb-4">Severity Distribution</h2>
+                <canvas id="severityChart"></canvas>
+            </div>
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <h2 class="text-xl font-bold mb-4">Detection Methods</h2>
+                <canvas id="detectionChart"></canvas>
+            </div>
+        </div>
+
+        <div class="bg-white shadow-lg rounded-lg p-6 mb-8">
+            <h2 class="text-xl font-bold mb-4">Scan Summary</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-600">Total URLs</p>
+                    <p class="text-2xl font-bold">{{.Summary.TotalURLs}}</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-600">Scanned URLs</p>
+                    <p class="text-2xl font-bold">{{.Summary.ScannedURLs}}</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-600">Vulnerable URLs</p>
+                    <p class="text-2xl font-bold text-red-600">{{.Summary.VulnerableURLs}}</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-lg">
+                    <p class="text-sm text-gray-600">Total Findings</p>
+                    <p class="text-2xl font-bold">{{len .Results}}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white shadow-lg rounded-lg p-6">
+            <h2 class="text-xl font-bold mb-4">Vulnerability Findings</h2>
+            <div class="overflow-x-auto">
+                <table class="min-w-full table-auto">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Severity</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">URL</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Payload</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        {{range .Results}}
+                        <tr>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                                    {{if eq .Severity "High"}}bg-red-100 text-red-800
+                                    {{else if eq .Severity "Medium"}}bg-yellow-100 text-yellow-800
+                                    {{else}}bg-green-100 text-green-800{{end}}">
+                                    {{.Severity}}
+                                </span>
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{.URL}}</td>
+                            <td class="px-6 py-4 text-sm text-gray-500">{{.Description}}</td>
+                            <td class="px-6 py-4 text-sm text-gray-500">
+                                <code class="bg-gray-100 px-2 py-1 rounded">{{.Payload}}</code>
+                            </td>
+                        </tr>
+                        {{end}}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const severityCounts = JSON.parse(`{{.Summary.SeverityCounts | json}}`);
+        const detectionMethods = JSON.parse(`{{.Summary.DetectionMethods | json}}`);
+
+        const severityData = {
+            labels: Object.keys(severityCounts),
+            datasets: [{
+                data: Object.values(severityCounts),
+                backgroundColor: ['#EF4444', '#F59E0B', '#10B981']
+            }]
+        };
+
+        const detectionData = {
+            labels: Object.keys(detectionMethods),
+            datasets: [{
+                data: Object.values(detectionMethods),
+                backgroundColor: ['#6366F1', '#8B5CF6', '#EC4899']
+            }]
+        };
+
+        // Create charts
+        window.addEventListener('load', function() {
+            new Chart(document.getElementById('severityChart'), {
+                type: 'doughnut',
+                data: severityData,
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+
+            new Chart(document.getElementById('detectionChart'), {
+                type: 'doughnut',
+                data: detectionData,
+                options: {
+                    responsive: true,
+                    plugins: {
+                        legend: {
+                            position: 'bottom'
+                        }
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>

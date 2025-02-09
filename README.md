@@ -1,173 +1,131 @@
-# XSSBlitz - Advanced XSS Scanner
+# XSS Scanner
 
-XSSBlitz is a powerful Cross-Site Scripting (XSS) vulnerability scanner with machine learning capabilities, designed to help security professionals and developers identify potential XSS vulnerabilities in web applications.
+A modern, microservices-based Cross-Site Scripting (XSS) vulnerability scanner with machine learning capabilities.
 
-## Table of Contents
-- [Features](#features)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Advanced Configuration](#advanced-configuration)
-- [Machine Learning Integration](#machine-learning-integration)
-- [Troubleshooting](#troubleshooting)
+## Architecture
+
+The scanner is built using a microservices architecture with the following components:
+
+- **Scanner Service**: Core scanning engine for crawling and testing web pages
+- **Detection Service**: ML-based and pattern-based XSS detection
+- **Payload Service**: Dynamic payload generation with WAF bypass capabilities
+- **Report Service**: Interactive HTML and JSON report generation
+- **Coordinator Service**: Orchestrates all services and manages scanning workflow
 
 ## Features
 
-### Core Capabilities
-- ML-powered XSS detection with customizable threshold
-- Intelligent crawling with adjustable depth
-- Automatic keyword extraction from web content
-- Concurrent scanning for improved performance
-- Custom header support for authenticated scanning
-- Comprehensive reporting with severity levels
+- 🔍 Smart crawling and scanning of web applications
+- 🧠 Machine Learning based XSS detection
+- 🛡️ WAF bypass techniques
+- 📊 Interactive HTML reports
+- 🚀 Concurrent scanning
+- 💾 Result caching
+- 🎯 Context-aware payload generation
+- 📋 Multiple output formats (HTML, JSON)
 
-### Key Benefits
-- High accuracy with minimal false positives
-- Easy-to-use interactive interface
-- Flexible configuration options
-- Built-in machine learning model
-- Regular payload updates
+## Prerequisites
+
+- Go 1.21 or higher
+- Make
 
 ## Installation
 
-### System Requirements
-- Windows 10 or later
-- Go 1.21 or later
-- PowerShell 5.0 or later
-
-### Quick Install
-```powershell
-# Clone the repository
-git clone https://github.com/1takaonaiinc/xss-scanner
+1. Clone the repository:
+```bash
+git clone https://github.com/1takaonaiinc/xss-scanner.git
 cd xss-scanner
-
-# Run the installation script
-.\install.ps1
 ```
 
-### Manual Installation
-```powershell
-# Build from source
-go build -o bin/xss-scanner.exe cmd/xss-scanner/main.go
+2. Install dependencies:
+```bash
+make deps
+```
+
+3. Build the scanner:
+```bash
+make build
+```
+
+4. (Optional) Install globally:
+```bash
+make install
 ```
 
 ## Usage
 
-### Basic Scan
-```powershell
-.\bin\xss-scanner.exe
-```
-Follow the interactive prompts to configure your scan:
-
-1. Enter target URL (required)
-2. Specify custom XSS patterns (optional)
-3. Configure ML model settings
-4. Set scanning parameters
-5. Enable/disable verbose output
-
-### Configuration Options
-
-#### Target URL
-- Must start with `http://` or `https://`
-- Example: `https://example.com`
-
-#### Custom XSS Patterns
-- Comma-separated list of patterns
-- Leave empty to use default patterns
-- Example: `<script>alert(1)</script>,javascript:alert(1)`
-
-#### ML Model Settings
-- Model file path (default: models/default.json)
-- Detection threshold (0.0-1.0, default: 0.7)
-- Higher threshold = fewer false positives
-
-#### Scan Parameters
-- URLs to exclude (comma-separated)
-- Parameters to check (comma-separated)
-- Timeout in seconds (default: 30)
-- Concurrent scans (default: 5)
-- Crawling depth (default: 2)
-
-#### Custom Headers
-Format: `key1:value1,key2:value2`
-Example: `Authorization:Bearer token,X-Custom:value`
-
-## Advanced Configuration
-
-### Updating Payloads
-```powershell
-# Update XSS payload database
-.\update-payloads.ps1
+Basic scan of a URL:
+```bash
+./bin/xss-scanner -url https://example.com
 ```
 
-### CI/CD Integration
-```yaml
-# Example GitHub Actions workflow
-name: Security Scan
-on: [push]
-jobs:
-  scan:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Install XSSBlitz
-        run: .\install.ps1
-      - name: Run Scan
-        run: .\bin\xss-scanner.exe --ci --url ${{ secrets.TARGET_URL }}
+Advanced options:
+```bash
+./bin/xss-scanner -url https://example.com \
+  -context html \
+  -workers 10 \
+  -timeout 60s \
+  -model models/default.json \
+  -report-dir reports \
+  -cache=true \
+  -cache-ttl 24h
 ```
 
-### Custom ML Model Training
-1. Prepare training data in CSV format
-2. Use the provided scripts in the `models` directory
-3. Replace `default.json` with your trained model
+### Command Line Options
 
-## Machine Learning Integration
+- `-url`: Target URL to scan (required)
+- `-context`: Context for payload generation (html, attr, js, url)
+- `-workers`: Number of concurrent workers (default: 5)
+- `-timeout`: Scan timeout duration (default: 30s)
+- `-model`: Path to ML model file
+- `-report-dir`: Directory for scan reports (default: reports)
+- `-cache`: Enable result caching (default: true)
+- `-cache-ttl`: Cache TTL duration (default: 24h)
 
-### Model Overview
-- Based on natural language processing
-- Features extracted from HTML context
-- Trained on real-world XSS payloads
-- Regular updates via payload database
+## Development
 
-### Threshold Configuration
-- 0.7: Balanced detection (default)
-- 0.8: Lower false positives
-- 0.6: Higher detection rate
-- Adjust based on your security requirements
-
-## Troubleshooting
-
-### Common Issues
-
-#### Scanner fails to start
+### Project Structure
 ```
-Error: Cannot load ML model
-Solution: Verify models/default.json exists and is valid
-```
-
-#### Connection errors
-```
-Error: Connection timeout
-Solution: Check network connectivity and increase timeout value
+xss-scanner/
+├── cmd/
+│   └── scan/             # CLI application
+├── services/
+│   ├── scanner/          # Scanner service
+│   ├── detector/         # Detection service
+│   ├── payload/          # Payload generation service
+│   ├── reporter/         # Report generation service
+│   └── coordinator/      # Service orchestration
+├── models/               # ML models
+└── reports/              # Generated reports
 ```
 
-#### False positives
-```
-Issue: Too many false positive results
-Solution: Increase ML detection threshold (e.g., 0.8 or higher)
-```
+### Make Commands
 
-### Best Practices
-1. Start with default configuration
-2. Enable verbose mode for detailed output
-3. Adjust thresholds based on results
-4. Use custom headers for authenticated scans
-5. Regularly update payloads database
+- `make build`: Build all services and CLI
+- `make test`: Run tests
+- `make clean`: Clean build files
+- `make run`: Build and run scanner
+- `make install`: Install scanner to GOPATH
+- `make deps`: Download dependencies
+- `make tidy`: Tidy go.mod files
+- `make verify`: Verify dependencies
 
-## Support
+## Contributing
 
-- GitHub Issues: Report bugs and feature requests
-- Documentation: Refer to inline code comments
-- Updates: Check release notes for new features
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
-MIT License - See LICENSE file for details
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Security
+
+Please report security issues to [security@example.com](mailto:security@example.com).
+
+## Acknowledgments
+
+- Thanks to all contributors
+- Inspired by modern web security tools and best practices

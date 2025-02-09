@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -138,6 +139,12 @@ func main() {
 		fmt.Println("Extracted Keywords:", keywords)
 	}
 
+	// Check if any pages were found
+	if len(pages) == 0 {
+		fmt.Println("No pages found to scan. Please check the target URL and crawling depth.")
+		os.Exit(1)
+	}
+
 	// Initialize scanner with options
 	scanOpts := scanner.Options{
 		Patterns:       strings.Split(customPatterns, ","),
@@ -157,13 +164,43 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Start scanning
+	// Start scanning with context
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	defer cancel()
+
 	startTime := time.Now()
 	if verbose {
 		fmt.Printf("\nScanning %d pages...\n", len(pages))
 	}
 
-	results := s.ScanPages(pages)
+	results, err := s.ScanPages(ctx, pages)
+	if err != nil {
+		if scanErr, ok := err.(*scanner.ScannerError); ok {
+			switch scanErr.Type {
+			case scanner.ErrorTypeInvalidConfig:
+				fmt.Printf("\nConfiguration error: %v\n", scanErr)
+				os.Exit(1)
+			case scanner.ErrorTypeHTTPRequest:
+				fmt.Printf("\nHTTP request errors occurred during scanning: %v\n", scanErr)
+			case scanner.ErrorTypeNetworkFailure:
+				fmt.Printf("\nNetwork errors occurred during scanning: %v\n", scanErr)
+			case scanner.ErrorTypeInvalidResponse:
+				fmt.Printf("\nInvalid responses received during scanning: %v\n", scanErr)
+			case scanner.ErrorTypeMLPrediction:
+				fmt.Printf("\nML prediction errors occurred during scanning: %v\n", scanErr)
+			case scanner.ErrorTypeTimeout:
+				fmt.Printf("\nScan timed out after %d seconds\n", timeout)
+			default:
+				fmt.Printf("\nUnexpected errors occurred during scanning: %v\n", scanErr)
+			}
+		} else {
+			fmt.Printf("\nScan errors occurred: %v\n", err)
+		}
+
+		if !verbose {
+			fmt.Printf("Run with verbose mode for detailed error information.\n")
+		}
+	}
 
 	if verbose {
 		fmt.Printf("\nScan completed in %s\n", time.Since(startTime))
@@ -173,9 +210,16 @@ func main() {
 	fmt.Printf("\nXSS Vulnerability Report for %s:\n", targetURL)
 	fmt.Printf("Scanned %d pages\n", len(pages))
 
+	pagesWithIssues := make(map[string]bool)
 	var high, medium int
+
 	for _, result := range results {
 		fmt.Printf("[%s] %s\n\t%s\n", result.Severity, result.Description, result.Payload)
+		if strings.Contains(result.Description, "on") {
+			page := strings.Split(result.Description, "on")[1]
+			page = strings.TrimSpace(strings.Split(page, "(")[0])
+			pagesWithIssues[page] = true
+		}
 		if result.Severity == "High" {
 			high++
 		} else if result.Severity == "Medium" {
@@ -184,9 +228,14 @@ func main() {
 	}
 
 	fmt.Printf("\nSummary:\n")
+	fmt.Printf("- Pages with issues: %d/%d\n", len(pagesWithIssues), len(pages))
 	fmt.Printf("- High severity issues: %d\n", high)
 	fmt.Printf("- Medium severity issues: %d\n", medium)
 	fmt.Printf("- Total scan time: %s\n", time.Since(startTime))
+
+	if high > 0 {
+		os.Exit(2) // Exit with error code 2 for high severity issues
+	}
 }
 
 func validateURL(input string) error {

@@ -1,12 +1,15 @@
 package scanner
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/1takaonaiinc/xss-scanner/pkg/payloadgen"
 	"github.com/1takaonaiinc/xss-scanner/pkg/predictor"
 )
 
@@ -30,11 +33,22 @@ type ScannerConfig struct {
 	IncludeParams   []string
 }
 
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
 type Scanner struct {
-	patterns  []string
-	verbose   bool
-	predictor *predictor.Predictor
-	config    ScannerConfig
+	patterns   []string
+	verbose    bool
+	predictor  *predictor.Predictor
+	config     ScannerConfig
+	client     HTTPClient
+	payloadGen *payloadgen.Generator
+}
+
+// SetClient allows setting a custom HTTP client (primarily for testing)
+func (s *Scanner) SetClient(client HTTPClient) {
+	s.client = client
 }
 
 type ScanResult struct {
@@ -76,67 +90,119 @@ func NewScanner(opts Options) (*Scanner, error) {
 	}
 
 	return &Scanner{
-		patterns:  patterns,
-		verbose:   opts.Verbose,
-		predictor: pred,
-		config:    config,
+		patterns:   patterns,
+		verbose:    opts.Verbose,
+		predictor:  pred,
+		config:     config,
+		client:     &http.Client{Timeout: time.Duration(opts.TimeoutSeconds) * time.Second},
+		payloadGen: payloadgen.NewGenerator(),
 	}, nil
 }
 
-func (s *Scanner) ScanPages(pages []string) []ScanResult {
+func (s *Scanner) ScanPages(ctx context.Context, pages []string) ([]ScanResult, error) {
+	if len(pages) == 0 {
+		return nil, NewScannerError(ErrorTypeInvalidConfig, "no pages provided to scan", nil)
+	}
+
 	results := make([]ScanResult, 0)
-	semaphore := make(chan bool, s.config.MaxConcurrency)
+	semaphore := make(chan struct{}, s.config.MaxConcurrency)
 	resultChan := make(chan ScanResult)
-	done := make(chan bool)
+	errChan := make(chan error, len(pages))
+	done := make(chan struct{})
+
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.config.TimeoutSeconds)*time.Second)
+	defer cancel()
 
 	// Start worker goroutine to collect results
 	go func() {
-		for result := range resultChan {
-			results = append(results, result)
+		defer close(done)
+		for {
+			select {
+			case result, ok := <-resultChan:
+				if !ok {
+					return
+				}
+				results = append(results, result)
+			case <-ctx.Done():
+				return
+			}
 		}
-		done <- true
+	}()
+
+	// Error collector
+	var scanErrors []error
+	var errMu sync.Mutex
+	go func() {
+		for err := range errChan {
+			errMu.Lock()
+			scanErrors = append(scanErrors, err)
+			errMu.Unlock()
+		}
 	}()
 
 	// Process pages concurrently
 	for _, page := range pages {
-		semaphore <- true
+		select {
+		case <-ctx.Done():
+			return results, NewScannerError(ErrorTypeTimeout, "scan timeout exceeded", ctx.Err())
+		case semaphore <- struct{}{}:
+		}
+
+		wg.Add(1)
 		go func(url string) {
+			defer wg.Done()
 			defer func() { <-semaphore }()
-			s.scanPage(url, resultChan)
+
+			if err := s.scanPage(ctx, url, resultChan); err != nil {
+				select {
+				case errChan <- err:
+				case <-ctx.Done():
+				}
+			}
 		}(page)
 	}
 
 	// Wait for all workers to finish
-	for i := 0; i < cap(semaphore); i++ {
-		semaphore <- true
-	}
-	close(resultChan)
-	<-done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+		close(errChan)
+	}()
 
-	return results
+	// Wait for either completion or context cancellation
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return results, NewScannerError(ErrorTypeTimeout, "scan timeout exceeded", ctx.Err())
+	}
+
+	if len(scanErrors) > 0 {
+		// Combine all errors into a single error message
+		var errMsgs []string
+		for _, err := range scanErrors {
+			errMsgs = append(errMsgs, err.Error())
+		}
+		return results, NewScannerError(ErrorTypeHTTPRequest, "scanning errors occurred", fmt.Errorf(strings.Join(errMsgs, "; ")))
+	}
+
+	return results, nil
 }
 
-func (s *Scanner) scanPage(page string, resultChan chan<- ScanResult) {
+func (s *Scanner) scanPage(ctx context.Context, page string, resultChan chan<- ScanResult) error {
 	// Check if URL should be excluded
 	for _, pattern := range s.config.ExcludePatterns {
 		if strings.Contains(page, pattern) {
 			if s.verbose {
 				fmt.Printf("Skipping excluded URL: %s\n", page)
 			}
-			return
+			return nil
 		}
 	}
 
-	client := &http.Client{
-		Timeout: time.Duration(s.config.TimeoutSeconds) * time.Second,
-	}
-
-	req, err := http.NewRequest("GET", page, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", page, nil)
 	if err != nil {
-		if s.verbose {
-			fmt.Printf("Failed to create request for %s: %v\n", page, err)
-		}
-		return
+		return fmt.Errorf("%w: failed to create request for %s: %v", ErrorTypeHTTPRequest, page, err)
 	}
 
 	// Add custom headers
@@ -144,12 +210,9 @@ func (s *Scanner) scanPage(page string, resultChan chan<- ScanResult) {
 		req.Header.Add(key, value)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
-		if s.verbose {
-			fmt.Printf("Failed to fetch page %s: %v\n", page, err)
-		}
-		return
+		return fmt.Errorf("%w: failed to fetch page %s: %v", ErrorTypeNetworkFailure, page, err)
 	}
 	defer resp.Body.Close()
 
@@ -157,15 +220,12 @@ func (s *Scanner) scanPage(page string, resultChan chan<- ScanResult) {
 		if s.verbose {
 			fmt.Printf("Skipping non-HTML content: %s\n", page)
 		}
-		return
+		return nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		if s.verbose {
-			fmt.Printf("Failed to read body of %s: %v\n", page, err)
-		}
-		return
+		return fmt.Errorf("%w: failed to read body of %s: %v", ErrorTypeInvalidResponse, page, err)
 	}
 
 	content := string(body)
@@ -180,13 +240,23 @@ func (s *Scanner) scanPage(page string, resultChan chan<- ScanResult) {
 		}
 	}
 
-	// Traditional pattern matching
-	for _, pattern := range s.patterns {
-		if strings.Contains(content, pattern) {
-			resultChan <- ScanResult{
-				Severity:    "High",
-				Description: fmt.Sprintf("Pattern-matched XSS vulnerability on %s", page),
-				Payload:     fmt.Sprintf("Found pattern: %s", pattern),
+	// Pattern matching with context-aware check
+	payloads := s.payloadGen.Generate(content, len(s.patterns))
+	for _, payload := range payloads {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w: context cancelled during pattern matching", ErrorTypeTimeout)
+		default:
+			if strings.Contains(content, payload) {
+				select {
+				case resultChan <- ScanResult{
+					Severity:    "High",
+					Description: fmt.Sprintf("Pattern-matched XSS vulnerability on %s", page),
+					Payload:     fmt.Sprintf("Found payload: %s", payload),
+				}:
+				case <-ctx.Done():
+					return fmt.Errorf("%w: context cancelled while sending result", ErrorTypeTimeout)
+				}
 			}
 		}
 	}
@@ -218,4 +288,6 @@ func (s *Scanner) scanPage(page string, resultChan chan<- ScanResult) {
 			}
 		}
 	}
+
+	return nil
 }
